@@ -8,20 +8,6 @@ import configparser
 import os
 from enum import Enum
 
-def get_local_ip():
-    """Get the local network IP address"""
-    try:
-        # Create a socket to connect to an external address
-        # This forces the system to reveal the local network IP
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            # Connect to a public DNS server (doesn't actually send data)
-            s.connect(("8.8.8.8", 80))
-            local_ip = s.getsockname()[0]
-        return local_ip
-    except Exception:
-        # Fallback to localhost if network detection fails
-        return "127.0.0.1"
-
 class GameState(Enum):
     MENU = 1
     PLAYING = 2
@@ -38,21 +24,16 @@ class GameServer:
         # Load configuration from INI file
         self.config = self.load_server_config()
         
-        # If no host specified, use the local network IP
-        if host is None:
-            host = get_local_ip()
-        self.host = host
+        # Use config IP address (forced to 0.0.0.0)
+        self.host = self.config.get('ServerAddress', '0.0.0.0')
         
-        # Use config port or default
-        if port is None:
-            port = self.config.getint('Server', 'Port', fallback=5555)
-        self.port = port
+        # Use config port
+        self.port = self.config.getint('Port', 5555)
         
-        # Use config values or defaults
-        if max_players is None:
-            max_players = self.config.getint('Server', 'MaxPlayers', fallback=4)
-            # Validate max_players is between 0-4 (0 requires token)
-            max_players = max(0, min(4, max_players))
+        # Use config max players
+        max_players = self.config.getint('MaxPlayers', 8)
+        # Validate max_players is between 0-8 (0 requires token)
+        max_players = max(0, min(8, max_players))
             
         # Check if max_players is 0, then require token authentication
         if max_players == 0:
@@ -62,10 +43,10 @@ class GameServer:
                 exit(1)
         
         self.max_players = max_players
-        self.server_description = self.config.get('Server', 'Description', fallback='Stalked Game Server')
+        self.server_description = self.config.get('Description', 'Stalked Game Server')
         
         # Load difficulty from config
-        difficulty_str = self.config.get('Server', 'Difficulty', fallback='MEDIUM').upper()
+        difficulty_str = self.config.get('Difficulty', 'MEDIUM').upper()
         try:
             self.difficulty = Difficulty[difficulty_str]
         except KeyError:
@@ -130,28 +111,55 @@ class GameServer:
             
     def load_server_config(self):
         """Load server configuration from serverconfig.ini, create default if missing"""
-        config = configparser.ConfigParser()
         
         # Create default config file if it doesn't exist
         if not os.path.exists('serverconfig.ini'):
             print("Creating default serverconfig.ini...")
-            config['Server'] = {
-                'Description': 'Stalked Game Server',
-                'MaxPlayers': '4',
-                'Difficulty': 'MEDIUM',
-                'Port': '5555'
-            }
-            print("Note: Set MaxPlayers to 0 in serverconfig.ini for unlimited players (requires partnership TOKEN file)")
             with open('serverconfig.ini', 'w') as configfile:
-                config.write(configfile)
+                configfile.write("Description=Stalked Game Server\n")
+                configfile.write("MaxPlayers=8\n")
+                configfile.write("Difficulty=MEDIUM\n")
+                configfile.write("Port=5555\n")
+                configfile.write("ServerAddress=0.0.0.0\n")
+            print("Note: Set MaxPlayers to 0 in serverconfig.ini for unlimited players (requires partnership TOKEN file)")
             print("Default serverconfig.ini created successfully!")
         
+        # Simple config object to hold key-value pairs
+        class SimpleConfig:
+            def __init__(self):
+                self.data = {}
+                self.defaults = {
+                    'Description': 'Stalked Game Server',
+                    'MaxPlayers': '8',
+                    'Difficulty': 'MEDIUM',
+                    'Port': '5555',
+                    'ServerAddress': '0.0.0.0'
+                }
+            
+            def get(self, key, fallback=None):
+                return self.data.get(key, fallback or self.defaults.get(key, fallback))
+            
+            def getint(self, key, fallback=None):
+                value = self.get(key, fallback)
+                try:
+                    return int(value)
+                except (ValueError, TypeError):
+                    return int(fallback) if fallback else 0
+        
+        config = SimpleConfig()
+        
         try:
-            config.read('serverconfig.ini')
+            # Read the config file as simple key=value pairs
+            with open('serverconfig.ini', 'r') as configfile:
+                for line in configfile:
+                    line = line.strip()
+                    if line and '=' in line and not line.startswith('#'):
+                        key, value = line.split('=', 1)
+                        config.data[key.strip()] = value.strip()
             return config
         except Exception as e:
             print(f"Error loading server config: {e}")
-            return configparser.ConfigParser()
+            return config
         
     def start_server(self):
         """Initialize and start the TCP server"""
